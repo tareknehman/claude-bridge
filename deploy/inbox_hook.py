@@ -47,10 +47,13 @@ def parse(text):
 
 
 def main():
-    msgs = parse(read_inbox())
+    records = parse(read_inbox())
+    # `bot ... --wait` appends {"consumed": <id>} once it has shown a reply; skip those replies here.
+    consumed = {r.get('consumed') for r in records if r.get('consumed')}
+    msgs = [r for r in records if 'message' in r and r.get('id') not in consumed]
     seen = float(SEEN.read_text().strip()) if SEEN.exists() else 0.0
     SEEN.parent.mkdir(parents=True, exist_ok=True)
-    latest = max([m.get('ts', 0) for m in msgs] + [seen])
+    latest = max([r.get('ts', 0) for r in records] + [seen])
     if '--mark' in sys.argv:
         SEEN.write_text(str(latest))
         return
