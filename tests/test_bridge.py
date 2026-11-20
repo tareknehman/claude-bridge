@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 import urllib.request
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -237,6 +238,32 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(len(block.splitlines()), 1)
         self.assertNotIn('\x1b', ctx)
         self.assertEqual(ctx.count('</bot-messages>'), 1)
+
+    def test_send_wait_marks_the_reply_seen_for_the_inbox_hook(self):
+        cfg_file = self.root / 'config.json'
+        cfg_file.write_text(json.dumps(self.cfg))
+        self.call('message_claude', message='earlier news', from_bot='helper')
+        self.call('message_claude', message='pong', reply_to='p123', from_bot='helper')
+        sent = {'ping_id': 'p123', 'to': 'helper', 'via': 'helper', 'http': 200}
+        with mock.patch.object(bridge, 'send_to_bot', return_value=sent), mock.patch('builtins.print'):
+            bridge.main(['--config', str(cfg_file), 'send', 'helper', 'ping', '--wait', '1'])
+        inbox = Path(self.cfg['state_dir']) / 'inbox' / 'claude-code.jsonl'
+        records = [json.loads(line) for line in inbox.read_text().splitlines()]
+        pong = next(r for r in records if r.get('reply_to') == 'p123')
+        self.assertEqual([r['consumed'] for r in records if 'consumed' in r], [pong['id']])
+        # The session that waited saw "pong"; the next session start shows only what nobody saw.
+        home = self.root / 'home'
+        (home / '.claude-bridge').mkdir(parents=True)
+        (home / '.claude-bridge' / 'inbox').symlink_to(inbox.parent)
+        out = subprocess.run([sys.executable, str(Path(bridge.__file__).parent / 'deploy' / 'inbox_hook.py')],
+                             input='{}', capture_output=True, text=True, env=dict(os.environ, HOME=str(home)))
+        ctx = json.loads(out.stdout)['hookSpecificOutput']['additionalContext']
+        self.assertTrue(ctx.startswith('1 unread'), ctx[:40])
+        self.assertIn('earlier news', ctx)
+        self.assertNotIn('pong', ctx)
+        # Consumed records don't break the inbox for the server (rate-limit scan) or for wait_reply.
+        self.assertFalse(self.call('message_claude', message='after', from_bot='helper')[0])
+        self.assertEqual(bridge.wait_reply(self.cfg, 'p123', timeout=0)['message'], 'pong')
 
     def test_resume_inherits_and_raises_the_hop(self):
         _, s = self.call('delegate_to_claude', repo='demo', task='first', hop=1)

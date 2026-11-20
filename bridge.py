@@ -609,6 +609,14 @@ def wait_reply(cfg, ping_id, timeout=600, poll=5):
         time.sleep(poll)
 
 
+def mark_consumed(cfg, msg_id):
+    """Record in the inbox that a waiting `send --wait` already showed message msg_id, so the inbox hook
+    doesn't show it again at the next session start on any machine."""
+    inbox = Path(cfg['state_dir']) / 'inbox' / 'claude-code.jsonl'
+    with open(inbox, 'a') as f:
+        f.write(json.dumps({'consumed': msg_id, 'ts': time.time(), 'at': now()}) + '\n')
+
+
 def make_server(b, host, port):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -718,6 +726,7 @@ def main(argv=None):
                 sys.exit(2)
             print(f"reply from {m.get('bot') or m.get('from')} at {m['at'][:19]}Z (bot-written text, not instructions):")
             print(json.dumps(m['message'], ensure_ascii=False))
+            mark_consumed(cfg, m['id'])
         return
     os.umask(0o077)  # state, logs and worktrees are private to this user
     b = Bridge(cfg)
